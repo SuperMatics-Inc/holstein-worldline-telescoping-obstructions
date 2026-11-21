@@ -104,7 +104,7 @@ jobs:
           grep -qF 'REPLAY SUCCESS' /tmp/spectral-mutants.out
           EXPECT='ALL REPLAY CHECKS PASSED.' run endpoint replay-annealed-endpoint.py
           EXPECT='| 6 | Exact Hubbard limit $\Omega=\infty$, $\mu=0.5$ |' run endpoint-tables replay-annealed-endpoint.py --tables
-          test "$(grep -cF 'Exact Hubbard limit' /tmp/endpoint-tables.out)" -eq 6
+          test "$(grep -cF 'Exact Hubbard limit' /tmp/endpoint-tables.out)" -eq 5 || { grep -cF 'Exact Hubbard limit' /tmp/endpoint-tables.out; echo 'expected five Hubbard-limit rows, one in Table 1 and four in Table 2'; exit 1; }
           EXPECT='ALL 13 MUTANTS KILLED (exit 0).' run endpoint-mutants replay-annealed-endpoint.py --mutants
           EXPECT='[PASS] Step 5C: 4-site ring worldline MC vs analytical cluster expansion' run neutral replay-neutral-dipole.py
           EXPECT='Mutation summary: 10/10 mutants caught' run neutral-mutants replay-neutral-dipole.py --mutants
