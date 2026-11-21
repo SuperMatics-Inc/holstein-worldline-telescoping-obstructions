@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TECTONIC_VERSION: "0.17.0"
+  TECTONIC_SHA256: "8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7"
+  SOURCE_DATE_EPOCH: "1795132800"
+  PREFIX: "holstein-worldline-telescoping-obstructions-1.0.0"
+
+jobs:
+  replay:
+    name: Replay the five supplement scripts from the release archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the replay dependencies
+        run: |
+          python -m pip install --quiet --disable-pip-version-check numpy scipy mpmath sympy
+          python -c "import numpy, scipy, mpmath, sympy; print(numpy.__version__, scipy.__version__, mpmath.__version__, sympy.__version__)"
+
+      - name: Pinned sources match the review
+        run: |
+          sha256sum paper/main.tex | grep -qx 'c1eb13f13ee826280361b1fa98487030c0e6e49b12579b36ad37a71cea70de9b  paper/main.tex'
+          sha256sum paper/refs.bib | grep -qx '0594895e946ba594ea23120f20a39908aeb12fbaf25f34e32c42250f5bbd0690  paper/refs.bib'
+          sha256sum paper/main.pdf | grep -qx '52a80ea0b6b837a0286eeb467a4ad1b5af9afcaaf0601192fb4a1f5cb4d14dc9  paper/main.pdf'
+          sha256sum paper/CLAIMS.md | grep -qx '24b0233a6a86d6d8ac113e2c97bee43576798b9bef4ee478ba1548a4b4e249c8  paper/CLAIMS.md'
+          sha256sum replay/README.md | grep -qx '9a6bc0303bcf2e452cb273038850b181aa23dd7c05b9aac99b2e6ea1de9f9ce6  replay/README.md'
+          sha256sum replay/SHA256SUMS | grep -qx '205ae07333ad8892ccbc1bfcfaa24f73c9c441d39ddff431f02228430874eced  replay/SHA256SUMS'
+          sha256sum replay/replay-charged-skeleton.py | grep -qx '4fe93b2bd0fdf3c11a75aef7cbe415ed9a4015a8a682a38c00adba5c65d8368d  replay/replay-charged-skeleton.py'
+          sha256sum replay/replay-telescope.py | grep -qx '800d6e12d196de3f585ad7d0c295b3be20006292eaeddc56b951e919d95b094b  replay/replay-telescope.py'
+          sha256sum replay/replay-annealed-spectral.py | grep -qx 'd33e788fe95ed1139f34372b50e0c6c879e2f41eee734db598f494b00d74e8fd  replay/replay-annealed-spectral.py'
+          sha256sum replay/replay-annealed-endpoint.py | grep -qx 'd013cda90dde118358b489e382a587bfc1d740c0586427f6057fd827d2582595  replay/replay-annealed-endpoint.py'
+          sha256sum replay/replay-neutral-dipole.py | grep -qx 'e4f07397205b0343686369f0665c4648ed289eeaffe16aa0683adbe933aeea6a  replay/replay-neutral-dipole.py'
+          sha256sum replay/run_all.py | grep -qx '45647e15f8b6a38cbb2593341fda6b9fc6350671172e2cb71a37ec1657acde7b  replay/run_all.py'
+
+      - name: Both pin files verify
+        run: |
+          sha256sum -c --strict MANIFEST.sha256
+          (cd replay && sha256sum -c --strict SHA256SUMS)
+
+      - name: The manifest covers every tracked file
+        run: |
+          git ls-files | grep -vx 'MANIFEST.sha256' | sort > /tmp/tracked.txt
+          grep -v '^\s*$' MANIFEST.sha256 | sed -E 's/^[0-9a-f]{64}  //' | sort > /tmp/manifested.txt
+          diff -u /tmp/tracked.txt /tmp/manifested.txt
+          echo "manifest entries: $(wc -l < /tmp/manifested.txt)"
+
+      - name: No review, notes, fix or backup files, and no stray identifier
+        run: |
+          test -z "$(find . -path ./.git -prune -o -type f \( -iname '*review*' -o -iname 'notes*' -o -iname '*fix*' -o -iname '*scoping*' -o -iname '*.v[0-9].*' -o -iname '*.bak' \) -print)"
+          test -z "$(git grep -il 'a[s]tra' -- . || true)"
+          test -z "$(git grep -nE 'D:/|C:/|/scratch/|ceiling-20261118|/Users/' -- . ':!.github/workflows/ci.yml' || true)"
+
+      - name: Build the release archive and run every script on the unpacked copy
+        run: |
+          git archive --format=zip --prefix="${PREFIX}/" --output=/tmp/release.zip HEAD
+          mkdir /tmp/unpacked
+          unzip -q /tmp/release.zip -d /tmp/unpacked
+          tracked="$(git ls-files | wc -l)"
+          cd "/tmp/unpacked/${PREFIX}"
+          test "$(find . -type f | wc -l)" -eq "$tracked"
+          sha256sum -c --strict MANIFEST.sha256
+          (cd replay && sha256sum -c --strict SHA256SUMS)
+
+          show_logs() {
+            echo "a command stopped; every captured file follows"
+            for f in /tmp/*.out /tmp/*.err; do
+              [ -f "$f" ] || continue
+              echo "===== $f"
+              cat "$f"
+            done
+          }
+          run() {
+            name="$1"; shift
+            python -B "$@" > "/tmp/$name.out" 2>&1 && grep -qF -- "$EXPECT" "/tmp/$name.out" && return 0
+            echo "FAILED or closing line missing: python -B $* ; expected: $EXPECT"
+            show_logs
+            exit 1
+          }
+          cd replay
+          python -VV
+
+          EXPECT='ALL CHARGED-SKELETON CHECKS PASSED (EXIT 0)' run charged replay-charged-skeleton.py
+          EXPECT='ALL 8 MUTANTS CAUGHT WITH EXIT 1; DRIVER EXIT 0' run charged-mutants replay-charged-skeleton.py --mutants
+          EXPECT='ALL_CHECKS_PASSED' run telescope replay-telescope.py
+          EXPECT='MUTANTS all 7/7 caught with exit!=0; driver exit=0' run telescope-mutants replay-telescope.py --mutants
+          EXPECT='REPLAY SUCCESS' run spectral replay-annealed-spectral.py
+          EXPECT='ALL 7/7 MUTANTS CAUGHT' run spectral-mutants replay-annealed-spectral.py --mutants
+          grep -qF 'REPLAY SUCCESS' /tmp/spectral-mutants.out
+          EXPECT='ALL REPLAY CHECKS PASSED.' run endpoint replay-annealed-endpoint.py
+          EXPECT='| 6 | Exact Hubbard limit $\Omega=\infty$, $\mu=0.5$ |' run endpoint-tables replay-annealed-endpoint.py --tables
+          test "$(grep -cF 'Exact Hubbard limit' /tmp/endpoint-tables.out)" -eq 5 || { grep -cF 'Exact Hubbard limit' /tmp/endpoint-tables.out; echo 'expected five Hubbard-limit rows, one in Table 1 and four in Table 2'; exit 1; }
+          EXPECT='ALL 13 MUTANTS KILLED (exit 0).' run endpoint-mutants replay-annealed-endpoint.py --mutants
+          EXPECT='[PASS] Step 5C: 4-site ring worldline MC vs analytical cluster expansion' run neutral replay-neutral-dipole.py
+          EXPECT='Mutation summary: 10/10 mutants caught' run neutral-mutants replay-neutral-dipole.py --mutants
+          EXPECT='SUMMARY: 5/5 scripts passed in' run run-all run_all.py
+          grep -qE 'SUMMARY: 5/5 scripts passed in [0-9.]+s' /tmp/run-all.out
+
+          echo "all five scripts, every mutant battery, the tables mode and the combined driver passed on the unpacked archive"
+
+  paper:
+    name: Build the manuscript with Tectonic and verify the released PDF
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install poppler and pypdf
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          python3 -m pip install --quiet pypdf
+
+      - name: Install the pinned Tectonic release
+        run: |
+          curl -fsSL -o /tmp/tectonic.tar.gz \
+            "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${TECTONIC_SHA256}  /tmp/tectonic.tar.gz" | sha256sum -c --strict -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/tectonic.tar.gz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/tectonic" --version
+
+      - name: Released bytes match the review
+        run: |
+          cp paper/main.pdf /tmp/released.pdf
+          sha256sum paper/main.tex | grep -qx 'c1eb13f13ee826280361b1fa98487030c0e6e49b12579b36ad37a71cea70de9b  paper/main.tex'
+          sha256sum paper/refs.bib | grep -qx '0594895e946ba594ea23120f20a39908aeb12fbaf25f34e32c42250f5bbd0690  paper/refs.bib'
+          sha256sum /tmp/released.pdf | grep -qx '52a80ea0b6b837a0286eeb467a4ad1b5af9afcaaf0601192fb4a1f5cb4d14dc9  /tmp/released.pdf'
+
+      - name: Rebuild the manuscript with the pinned epoch
+        working-directory: paper
+        run: |
+          tectonic -X compile --keep-logs main.tex
+          test "$(grep -c '^Overfull' main.log)" -eq 0 || { grep -n '^Overfull' main.log; exit 1; }
+          test "$(grep -c '^Underfull' main.log)" -eq 2 || { grep -n '^Underfull' main.log; exit 1; }
+          test "$(grep -c 'undefined' main.log)" -eq 0 || { grep -n 'undefined' main.log; exit 1; }
+          test "$(grep -c 'Warning' main.log)" -eq 0 || { grep -n 'Warning' main.log; exit 1; }
+          pdfinfo main.pdf | tee /tmp/built.info
+          grep -qx 'Pages:[[:space:]]*20' /tmp/built.info
+          grep -q 'Davis Rens' /tmp/built.info
+          sha256sum main.pdf /tmp/released.pdf
+          test "$(sha256sum main.pdf | cut -d' ' -f1)" = '52a80ea0b6b837a0286eeb467a4ad1b5af9afcaaf0601192fb4a1f5cb4d14dc9'
+          cmp main.pdf /tmp/released.pdf
+          echo "the rebuilt PDF equals the released PDF byte for byte"
+
+      - name: The released PDF carries the title, identifiers and disclosed status
+        run: |
+          pdfinfo /tmp/released.pdf | tee /tmp/released.info
+          grep -qx 'Pages:[[:space:]]*20' /tmp/released.info
+          grep -qx 'Title:[[:space:]]*Worldline-cluster, annealed-spectral, and telescoping obstructions to a phonon-frequency pairing ceiling in the Holstein model' /tmp/released.info
+          grep -qx 'Author:[[:space:]]*Davis Rens, SuperMatics Inc., ORCID 0000-0001-5839-5197' /tmp/released.info
+          python3 -c 'import pypdf, sys; r = pypdf.PdfReader("/tmp/released.pdf"); sys.stdout.write("\n".join(p.extract_text() or "" for p in r.pages))' > /tmp/released-pypdf.txt
+          pdftotext -raw /tmp/released.pdf /tmp/released.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 ci/verify_text.py /tmp/released-pypdf.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 ci/verify_text.py /tmp/released.txt
+
+      - name: Public prose safeguards
+        run: |
+          test "$(grep -c 'This preprint has not been peer reviewed\.' paper/main.tex)" -eq 1
+          test "$(grep -c '—' paper/main.tex)" -eq 0
+          test -z "$(git grep -il 'a[s]tra' -- . || true)"
+          if git grep -nE 'D:/|C:/|/scratch/|ceiling-20261118|/Users/' -- . ':!.github/workflows/ci.yml'; then
+            echo "hardcoded local path in a released file"
+            exit 1
+          fi
+          test -z "$(find . -path ./.git -prune -o -type f \( -iname '*review*' -o -iname 'notes*' -o -iname '*fix*' -o -iname '*scoping*' -o -iname '*.v[0-9].*' -o -iname '*.bak' \) -print)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holstein-worldline-telescoping-obstructions-paper
+          path: |
+            paper/main.pdf
+            paper/main.tex
+            paper/refs.bib
+          if-no-files-found: error
