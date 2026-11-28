@@ -1,4 +1,5 @@
 # Worldline-cluster, annealed-spectral, and telescoping obstructions to a phonon-frequency pairing ceiling in the Holstein model
+Research record: [Worldline-cluster, annealed-spectral, and telescoping obstructions to a phonon-frequency pairing ceiling in the Holstein model](https://supermatics.io/research/worldline-telescoping-ceiling-obstructions).
 
 Davis Rens, SuperMatics Inc., [ORCID 0000-0001-5839-5197](https://orcid.org/0000-0001-5839-5197)
 
